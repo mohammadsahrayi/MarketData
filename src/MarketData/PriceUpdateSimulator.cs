@@ -20,10 +20,15 @@ namespace MarketData
                 {
                     services.AddSingleton<InMemoryPriceQueue>();
 
-                    services.AddSingleton<IPriceUpdateProcessor>(provider =>
-                        provider.GetRequiredService<InMemoryPriceQueue>());
 
-                    services.AddHostedService<PriceUpdateBackgroundService>();
+                    services.AddSingleton<IPriceUpdateProcessor, KafkaPriceQueue>();
+
+                    services.AddHostedService<KafkaPriceUpdateBackgroundService>();
+
+                    //services.AddSingleton<IPriceUpdateProcessor>(provider =>
+                    //    provider.GetRequiredService<InMemoryPriceQueue>());
+
+                   // services.AddHostedService<PriceUpdateBackgroundService>();
                     services.AddHostedService<PriceUpdateGeneratorService>();
 
                     services.AddLogging(config => config.AddConsole());

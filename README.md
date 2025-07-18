@@ -39,7 +39,7 @@ The system uses:
  Key Components
  PriceUpdateGeneratorService
 
-    Generates randomized price updates for a fixed set of symbols (e.g., "shasta", "fameli", "folad")
+    Generates randomized price updates for a fixed set of symbols (e.g.)
 
     Produces 10,000 price updates per batch
 
@@ -47,7 +47,7 @@ The system uses:
 
  InMemoryPriceQueue
 
-    In-memory unbounded Channel<PriceUpdate> for decoupling producer and consumer
+    In-memory unbounded Channel for decoupling producer and consumer
 
     Acts as the backbone for passing data safely across threads
 
@@ -71,16 +71,13 @@ The system uses:
 
         A price > 0
 
- Configurable Settings (via appsettings.json)
+ Configurable Settings 
 
-{
-  "MarketDataSettings": {
-    "MovingAverageLength": 50,
-    "SpikeThresholdPercent": 2.0
-  }
-}
+    MovingAverageLength
+    SpikeThresholdPercent
+  
 
-These values are injected using IOptions<MarketDataSettings>.
+These values are injected using IOptions
  Performance & Concurrency
 
     Handles high-throughput load with efficient producer-consumer pattern
@@ -105,7 +102,7 @@ These values are injected using IOptions<MarketDataSettings>.
 
  Why Console App?
 
-You chose Console + Background Services because:
+i chose Console + Background Services because:
 
     It is lightweight, fast to start, and perfect for simulation/testing
 

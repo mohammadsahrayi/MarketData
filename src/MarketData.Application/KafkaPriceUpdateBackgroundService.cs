@@ -4,14 +4,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
-using System.Text;
 using System.Text.Json;
-using System.Threading.Tasks;
 
 namespace MarketData.Application
 {
@@ -34,58 +29,48 @@ namespace MarketData.Application
             _history = new ConcurrentDictionary<string, ConcurrentQueue<PriceUpdate>>();
             _movingAverageLength = options.Value.MovingAverageLength;
             _spikeThresholdPercent = options.Value.SpikeThresholdPercent;
-            _semaphore = new SemaphoreSlim(Environment.ProcessorCount * 100);
+            _semaphore = new SemaphoreSlim(Environment.ProcessorCount * 500);
         }
 
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        protected override Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            var consumerConfig = new ConsumerConfig
+            var config = new ConsumerConfig
             {
                 BootstrapServers = _config["Kafka:BootstrapServers"] ?? "localhost:9092",
-                GroupId = "price-update-consumer",
-                AutoOffsetReset = AutoOffsetReset.Latest,
-                EnableAutoCommit = true
+                GroupId = "price-update-consumer-new",
+                AutoOffsetReset = AutoOffsetReset.Earliest,
+                EnablePartitionEof = false,
+                EnableAutoCommit = true,
+                FetchMinBytes = 1024 * 32,
+                MaxPartitionFetchBytes = 1024 * 1024
             };
 
-            using var consumer = new ConsumerBuilder<string, string>(consumerConfig).Build();
+            using var consumer = new ConsumerBuilder<string, string>(config).Build();
             consumer.Subscribe("price-updates");
 
-            int totalRequestsProcessed = 0;
             var stopwatch = Stopwatch.StartNew();
+            int total = 0;
 
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
-                while (!stoppingToken.IsCancellationRequested)
+                var result = consumer.Consume(stoppingToken);
+                var update = JsonSerializer.Deserialize<PriceUpdate>(result.Message.Value);
+
+                if (update != null)
                 {
-                    try
-                    {
-                        var result = consumer.Consume(stoppingToken);
-                        var update = JsonSerializer.Deserialize<PriceUpdate>(result.Message.Value);
+                    _ = Task.Run(() => ProcessPriceUpdate(update, stoppingToken), stoppingToken);
+                    total++;
+                }
 
-                        if (update == null) continue;
-
-                        await _semaphore.WaitAsync(stoppingToken);
-                        _ = ProcessPriceUpdate(update, stoppingToken);
-
-                        totalRequestsProcessed++;
-
-                        if (stopwatch.ElapsedMilliseconds >= 1000)
-                        {
-                            _logger.LogInformation($"Requests Processed in Last Second: {totalRequestsProcessed}");
-                            totalRequestsProcessed = 0;
-                            stopwatch.Restart();
-                        }
-                    }
-                    catch (ConsumeException ex)
-                    {
-                        _logger.LogError($"Kafka consume error: {ex.Error.Reason}");
-                    }
+                if (stopwatch.ElapsedMilliseconds >= 1000)
+                {
+                    _logger.LogInformation($"Consumed: {total} updates/sec");
+                    total = 0;
+                    stopwatch.Restart();
                 }
             }
-            finally
-            {
-                consumer.Close();
-            }
+
+            return Task.CompletedTask;
         }
 
         private Task ProcessPriceUpdate(PriceUpdate update, CancellationToken stoppingToken)

@@ -15,21 +15,28 @@ namespace MarketData.Application
         {
             var producerConfig = new ProducerConfig
             {
-                BootstrapServers = config["Kafka:BootstrapServers"] ?? "localhost:9092"
+                BootstrapServers = config["Kafka:BootstrapServers"] ?? "localhost:9092",
+                LingerMs = 5, // small batching
+                BatchSize = 32768, // 32KB
+                QueueBufferingMaxMessages = 1000000,
+                CompressionType = CompressionType.Lz4,
+                Acks = Acks.None,
+                EnableIdempotence = false
             };
             _producer = new ProducerBuilder<string, string>(producerConfig).Build();
         }
 
-        public async Task EnqueueAsync(PriceUpdate update)
+        public Task EnqueueAsync(PriceUpdate update)
         {
             var json = JsonSerializer.Serialize(update);
-            await _producer.ProduceAsync(_topic, new Message<string, string>
+            _producer.Produce(_topic, new Message<string, string>
             {
                 Key = update.Symbol,
                 Value = json
-            });
+            }, null); // no delivery report for speed
+            return Task.CompletedTask;
         }
 
-        public void Dispose() => _producer?.Dispose();
+        public void Dispose() => _producer?.Flush(TimeSpan.FromSeconds(3));
     }
 }

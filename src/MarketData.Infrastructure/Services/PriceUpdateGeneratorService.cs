@@ -4,78 +4,76 @@ using MarketData.Domain.Entities;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
+using System.Threading.Channels;
 
 namespace MarketData.Infrastructure.Services
 {
     public class PriceUpdateGeneratorService : BackgroundService
     {
-        private readonly IPriceUpdateProcessor _processor;
+        private readonly Channel<PriceUpdate> _channel;
         private readonly ILogger<PriceUpdateGeneratorService> _logger;
         private readonly IValidator<PriceUpdate> _validator;
         private readonly Random _random = new();
-        private readonly string[] _symbols = new[]
-        {
-        "fameli", "vabemellat", "shapna", "folad", "shsta"
-        };
+        private readonly string[] _symbols = { "fameli", "vabemellat", "shapna", "folad", "shsta" };
 
-        public PriceUpdateGeneratorService(IPriceUpdateProcessor processor, ILogger<PriceUpdateGeneratorService> logger, IValidator<PriceUpdate> validator)
+        public PriceUpdateGeneratorService(
+            IPriceUpdateProcessor processor,
+            ILogger<PriceUpdateGeneratorService> logger,
+            IValidator<PriceUpdate> validator)
         {
-            _processor = processor;
+            _channel = Channel.CreateUnbounded<PriceUpdate>(new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                AllowSynchronousContinuations = false
+            });
+
             _logger = logger;
             _validator = validator;
+
+            // consumer task
+            _ = Task.Run(async () =>
+            {
+                await foreach (var item in _channel.Reader.ReadAllAsync())
+                {
+                    await processor.EnqueueAsync(item);
+                }
+            });
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            var interval = TimeSpan.FromMicroseconds(50);
-            var batchSize = 10000;  
+            var stopwatch = Stopwatch.StartNew();
+            int total = 0;
 
-            int totalRequestsSent = 0; 
-            var stopwatch = new Stopwatch(); 
-            stopwatch.Start();
-
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                var tasks = new List<Task>();
-                var now = DateTime.UtcNow;
-
-                for (int i = 0; i < batchSize; i++)
+            _ = Task.Run(async () =>
                 {
-                    var ts = now.AddMilliseconds(-_random.Next(0, 1000)); 
-                    var update = new PriceUpdate
+                    while (!stoppingToken.IsCancellationRequested)
                     {
-                        Symbol = _symbols[_random.Next(_symbols.Length)],
-                        Price = (decimal)(_random.NextDouble() * 50000 + 1000),
-                        Timestamp = ts
-                    };
-
-                    var validationResult = _validator.Validate(update);
-                    if (!validationResult.IsValid)
-                    {
-
-                        foreach (var failure in validationResult.Errors)
+                        for (int i = 0; i < 10000; i++)
                         {
-                            _logger.LogWarning($"Validation failed for {failure.PropertyName}: {failure.ErrorMessage}");
+                            var update = new PriceUpdate
+                            {
+                                Symbol = _symbols[_random.Next(_symbols.Length)],
+                                Price = (decimal)(_random.NextDouble() * 50000 + 1000),
+                                Timestamp = DateTime.UtcNow.AddMilliseconds(-_random.Next(0, 1000))
+                            };
+              
+                            if (_validator.Validate(update).IsValid)
+                            {
+                                await _channel.Writer.WriteAsync(update, stoppingToken);
+                                total++;
+                            }
                         }
-                        continue;
+              
+                        if (stopwatch.ElapsedMilliseconds >= 1000)
+                        {
+                            _logger.LogInformation($"Generated/Sent: {total} updates/sec");
+                            total = 0;
+                            stopwatch.Restart();
+                        }
+              
                     }
-
-                    tasks.Add(_processor.EnqueueAsync(update));
-                }
-
-                await Task.WhenAll(tasks);
-                totalRequestsSent += batchSize;
-
-
-                if (stopwatch.ElapsedMilliseconds >= 1000)
-                {
-                    _logger.LogInformation($"Requests Sent in Last Second: {totalRequestsSent}");
-                    totalRequestsSent = 0;
-                    stopwatch.Restart();
-                }
-
-                await Task.Delay(interval, stoppingToken);
-            }
-        }
+                }, stoppingToken);
+              }
     }
 }
